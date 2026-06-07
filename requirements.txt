@@ -1,0 +1,14 @@
+torch
+torchvision
+torchaudio
+pennylane
+scikit-learn
+matplotlib
+pandas
+numpy
+pillow
+opencv-python
+tqdm
+pyyaml
+torchcam
+captum

@@ -1,0 +1,31 @@
+project_name: UQ-HyQNet
+seed: 42
+data_dir: data
+output_dir: outputs_hybrid_50epoch
+image_size: 224
+batch_size: 8
+epochs: 50
+learning_rate: 0.00005
+num_workers: 2
+model_name: hybrid_quantum
+
+# Simulated hybrid quantum-classical model.
+# Uses PennyLane default.qubit simulator only, not real quantum hardware.
+freeze_backbone: true
+unfreeze_last_n_blocks: 3
+pretrained_backbone: true
+
+n_qubits: 4
+n_quantum_layers: 2
+dropout: 0.3
+val_ratio: 0.15
+test_ratio: 0.15
+use_class_weights: true
+
+# Evaluation can be slow on CPU. Change to 5 if final evaluation takes too long.
+mc_dropout_samples: 20
+
+confidence_thresholds: [0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+early_stopping_patience: 12
+gradcam_examples_per_class: 3
+device: auto

@@ -1,0 +1,51 @@
+project_name: UQ-HyQNet
+seed: 42
+data_dir: data
+output_dir: outputs_200epoch_gpu
+image_size: 224
+
+# A GPU user can increase this if memory allows.
+# If CUDA runs out of memory, set batch_size to 8.
+batch_size: 16
+epochs: 200
+learning_rate: 0.00005
+num_workers: 4
+
+# This config is used by scripts/run_all_models.py, which overrides model_name
+# for classical_cnn, mobilenet_mlp, and hybrid_quantum.
+model_name: hybrid_quantum
+models_to_run: [classical_cnn, mobilenet_mlp, hybrid_quantum]
+
+# GPU-ready auto device. Uses CUDA if available, otherwise CPU.
+device: auto
+
+# Transfer learning settings for MobileNet-based models.
+freeze_backbone: true
+unfreeze_last_n_blocks: 5
+pretrained_backbone: true
+
+# Hybrid quantum settings. This is still PennyLane default.qubit simulator,
+# not real quantum hardware.
+n_qubits: 6
+n_quantum_layers: 3
+
+dropout: 0.3
+val_ratio: 0.15
+test_ratio: 0.15
+use_class_weights: true
+
+# Stabilizers for long training.
+gradient_clip_norm: 1.0
+use_lr_scheduler: true
+lr_scheduler_mode: min
+lr_scheduler_factor: 0.5
+lr_scheduler_patience: 8
+min_learning_rate: 0.000001
+
+# Keep early stopping effectively off for a full 200-epoch experiment.
+early_stopping_patience: 200
+
+# Evaluation settings. Lower to 5 if evaluation is too slow.
+mc_dropout_samples: 20
+confidence_thresholds: [0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+gradcam_examples_per_class: 3
