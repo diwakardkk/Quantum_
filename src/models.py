@@ -264,6 +264,162 @@ class HybridQuantumCNN(nn.Module):
         return self.features[-1]
 
 
+def _configure_quantum_head_training(
+    feature_modules: list[nn.Module],
+    head_modules: list[nn.Module],
+    freeze_backbone: bool,
+    unfreeze_last_n_blocks: int = 0,
+) -> None:
+    """Configure transfer learning for quantum-head backbones."""
+    if not freeze_backbone:
+        for module in feature_modules + head_modules:
+            for param in module.parameters():
+                param.requires_grad = True
+        return
+
+    for module in feature_modules:
+        for param in module.parameters():
+            param.requires_grad = False
+
+    if unfreeze_last_n_blocks > 0:
+        for module in feature_modules[-unfreeze_last_n_blocks:]:
+            for param in module.parameters():
+                param.requires_grad = True
+
+    for module in head_modules:
+        for param in module.parameters():
+            param.requires_grad = True
+
+
+class ResNet50QuantumCNN(nn.Module):
+    """ResNet-50 feature extractor plus a simulated PennyLane quantum head."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        n_qubits: int = 8,
+        n_quantum_layers: int = 3,
+        dropout: float = 0.3,
+        freeze_backbone: bool = True,
+        pretrained: bool = True,
+        unfreeze_last_n_blocks: int = 0,
+    ):
+        super().__init__()
+        base = _load_torchvision_model("resnet50", "ResNet50_Weights", pretrained=pretrained)
+        self.stem = nn.Sequential(base.conv1, base.bn1, base.relu, base.maxpool)
+        self.layer1 = base.layer1
+        self.layer2 = base.layer2
+        self.layer3 = base.layer3
+        self.layer4 = base.layer4
+        self.pool = base.avgpool
+        self.reducer = nn.Linear(base.fc.in_features, n_qubits)
+        self.quantum = PennyLaneQuantumLayer(
+            n_qubits=n_qubits,
+            n_quantum_layers=n_quantum_layers,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(n_qubits, num_classes)
+        self.n_qubits = n_qubits
+
+        _configure_quantum_head_training(
+            feature_modules=[self.layer1, self.layer2, self.layer3, self.layer4],
+            head_modules=[self.reducer, self.quantum, self.classifier],
+            freeze_backbone=freeze_backbone,
+            unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+        )
+        if freeze_backbone:
+            for param in self.stem.parameters():
+                param.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.pool(x)
+        x = torch.flatten(x, 1)
+        x = torch.tanh(self.reducer(x)) * math.pi
+        x = self.quantum(x)
+        x = self.dropout(x)
+        return self.classifier(x)
+
+    def get_cam_target_layer(self) -> nn.Module:
+        """Last ResNet block for Grad-CAM."""
+        return self.layer4[-1]
+
+
+class DenseNet121QuantumCNN(nn.Module):
+    """DenseNet-121 feature extractor plus a simulated PennyLane quantum head."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        n_qubits: int = 8,
+        n_quantum_layers: int = 3,
+        dropout: float = 0.3,
+        freeze_backbone: bool = True,
+        pretrained: bool = True,
+        unfreeze_last_n_blocks: int = 0,
+    ):
+        super().__init__()
+        base = _load_torchvision_model("densenet121", "DenseNet121_Weights", pretrained=pretrained)
+        self.features = base.features
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.reducer = nn.Linear(base.classifier.in_features, n_qubits)
+        self.quantum = PennyLaneQuantumLayer(
+            n_qubits=n_qubits,
+            n_quantum_layers=n_quantum_layers,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(n_qubits, num_classes)
+        self.n_qubits = n_qubits
+
+        _configure_quantum_head_training(
+            feature_modules=[
+                self.features.denseblock1,
+                self.features.transition1,
+                self.features.denseblock2,
+                self.features.transition2,
+                self.features.denseblock3,
+                self.features.transition3,
+                self.features.denseblock4,
+            ],
+            head_modules=[self.reducer, self.quantum, self.classifier],
+            freeze_backbone=freeze_backbone,
+            unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+        )
+        if freeze_backbone:
+            for name, param in self.features.named_parameters():
+                if not any(
+                    name.startswith(prefix)
+                    for prefix in [
+                        "denseblock1",
+                        "transition1",
+                        "denseblock2",
+                        "transition2",
+                        "denseblock3",
+                        "transition3",
+                        "denseblock4",
+                    ]
+                ):
+                    param.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = torch.relu(x)
+        x = self.pool(x)
+        x = torch.flatten(x, 1)
+        x = torch.tanh(self.reducer(x)) * math.pi
+        x = self.quantum(x)
+        x = self.dropout(x)
+        return self.classifier(x)
+
+    def get_cam_target_layer(self) -> nn.Module:
+        """Last DenseNet block for Grad-CAM."""
+        return self.features.denseblock4
+
+
 def _last_conv_layer(module: nn.Module) -> nn.Module | None:
     """Find the last Conv2d module for Grad-CAM."""
     conv_layers = [child for child in module.modules() if isinstance(child, nn.Conv2d)]
@@ -411,6 +567,26 @@ def build_model(model_name: str, num_classes: int, config: dict[str, Any]) -> nn
             pretrained=pretrained,
             unfreeze_last_n_blocks=unfreeze_last_n_blocks,
         )
+    if model_name == "resnet50_quantum":
+        return ResNet50QuantumCNN(
+            num_classes=num_classes,
+            n_qubits=int(config.get("n_qubits", 8)),
+            n_quantum_layers=int(config.get("n_quantum_layers", 3)),
+            dropout=dropout,
+            freeze_backbone=freeze_backbone,
+            pretrained=pretrained,
+            unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+        )
+    if model_name == "densenet121_quantum":
+        return DenseNet121QuantumCNN(
+            num_classes=num_classes,
+            n_qubits=int(config.get("n_qubits", 8)),
+            n_quantum_layers=int(config.get("n_quantum_layers", 3)),
+            dropout=dropout,
+            freeze_backbone=freeze_backbone,
+            pretrained=pretrained,
+            unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+        )
     if model_name in {"resnet18", "resnet50"}:
         return _build_resnet_baseline(
             variant=model_name,
@@ -454,6 +630,7 @@ def build_model(model_name: str, num_classes: int, config: dict[str, Any]) -> nn
 
     raise ValueError(
         f"Unknown model_name '{model_name}'. "
-        "Choose from: classical_cnn, mobilenet_mlp, hybrid_quantum, vgg16, "
-        "resnet18, resnet50, densenet121, efficientnet_b0, vit_b_16."
+        "Choose from: classical_cnn, mobilenet_mlp, hybrid_quantum, "
+        "resnet50_quantum, densenet121_quantum, vgg16, resnet18, "
+        "resnet50, densenet121, efficientnet_b0, vit_b_16."
     )
